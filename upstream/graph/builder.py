@@ -33,11 +33,30 @@ def load_seed(path: Path = DEFAULT_SEED) -> Tuple[Dict[str, Node], List[Edge]]:
             rfc=list(entry.get("rfc", [])),
             layer=entry.get("layer", "app"),
             wire=entry.get("wire", "binary"),
+            canonical=bool(entry.get("canonical", False)),
             note=entry.get("note"),
         )
         if n.id in nodes:
             raise ValueError(f"Duplicate node id: {n.id}")
         nodes[n.id] = n
+
+    # Validate: each family must have exactly one canonical node
+    families: Dict[str, list] = {}
+    for n in nodes.values():
+        families.setdefault(n.family, []).append(n)
+    for fam, members in families.items():
+        n_canonical = sum(1 for m in members if m.canonical)
+        if n_canonical == 0:
+            raise ValueError(
+                f"Family '{fam}' has no canonical node; mark exactly one node "
+                f"with `canonical: true`."
+            )
+        if n_canonical > 1:
+            cans = [m.id for m in members if m.canonical]
+            raise ValueError(
+                f"Family '{fam}' has multiple canonical nodes: {cans}. "
+                f"Exactly one must be canonical."
+            )
 
     edges: List[Edge] = []
     for entry in raw["edges"]:
@@ -69,6 +88,7 @@ def build_graph(path: Path = DEFAULT_SEED) -> nx.MultiDiGraph:
             "rfc": node.rfc,
             "layer": node.layer,
             "wire": node.wire,
+            "canonical": node.canonical,
             "note": node.note,
         })
     for e in edges:
@@ -81,8 +101,22 @@ def node_obj(g: nx.MultiDiGraph, nid: str) -> Node:
     a = g.nodes[nid]
     return Node(
         id=nid, family=a["family"], version=a["version"],
-        rfc=a["rfc"], layer=a["layer"], wire=a["wire"], note=a.get("note"),
+        rfc=a["rfc"], layer=a["layer"], wire=a["wire"],
+        canonical=a.get("canonical", False), note=a.get("note"),
     )
+
+
+def canonical_of(g: nx.MultiDiGraph, nid: str) -> str:
+    """Return the canonical node id of the same family as `nid`."""
+    fam = g.nodes[nid]["family"]
+    for n in g.nodes():
+        if g.nodes[n]["family"] == fam and g.nodes[n].get("canonical", False):
+            return n
+    raise ValueError(f"No canonical node found for family '{fam}'")
+
+
+def is_canonical(g: nx.MultiDiGraph, nid: str) -> bool:
+    return bool(g.nodes[nid].get("canonical", False))
 
 
 def stats(g: nx.MultiDiGraph) -> dict:

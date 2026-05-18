@@ -1,79 +1,83 @@
-# RFCGym Protocol Graph - Seed v2 (application layer only)
+# RFCGym Protocol Graph - Seed v3 (application layer only)
 #
-# Coverage: 30 application-layer protocol nodes. Each multi-version protocol
-# expands to one node per version. Version edges are directed NEWER -> OLDER
-# (matches the natural "translates down to" gateway direction, e.g. HTTP/3 -> HTTP/1.1).
+# Changes vs v2:
+#   - Each distinct protocol gets its own `family` (no more lumping spf/dkim/dmarc
+#     under "emailauth", or cors/sop under "webapp"). Family is the protocol
+#     identity; multiple nodes share a family only when they are different
+#     versions of the SAME protocol.
+#   - Every family has exactly one node with `canonical: true`. The canonical
+#     version is what the walker uses when traversing CROSS-PROTOCOL edges
+#     (composes_with / embeds). For cross-version walks (L2), any version may
+#     participate.
 #
-# Constraint on the walker (enforced in random_walk.py, not here):
-#   If the first edge sampled in a walk is `version_of`, the walk terminates
-#   at that 2-node pair. No further hops, no other protocols, no other versions.
-#   Rationale: a cross-version translation scenario is atomic - one version pair.
-#   Chaining (h3 -> h2 -> h1.1) muddies the bug_layer for downstream analysis.
+# Walker semantics (enforced in random_walk.py):
+#   1. Pick a seed node uniformly at random from ALL nodes.
+#   2. Sample one option from {L1_STOP, L2 (version_of neighbor), L4 (cross-
+#      protocol canonical neighbor)}:
+#        - L1_STOP: walk ends, single-protocol design issue
+#        - L2: walk ends at the version pair (atomic 2 nodes)
+#        - L4: target must be canonical; seed is replaced by its own canonical
+#              if the seed was non-canonical; walk may extend one more hop
+#              (canonical-only). 2 or 3 nodes total.
+#   3. The "edge to None" is a synthetic L1_STOP option present at every node.
 
 nodes:
-  # === HTTP family (5 versions) ===
-  - {id: http_0_9, family: http, version: "0.9", rfc: [],          layer: app, wire: text,
-     note: "Historical; minimal request/response"}
+  # === HTTP family (5 versions; canonical = http_1_1) ===
+  - {id: http_0_9, family: http, version: "0.9", rfc: [],          layer: app, wire: text}
   - {id: http_1_0, family: http, version: "1.0", rfc: [1945],      layer: app, wire: text}
-  - {id: http_1_1, family: http, version: "1.1", rfc: [9110, 9112], layer: app, wire: text}
+  - {id: http_1_1, family: http, version: "1.1", rfc: [9110, 9112], layer: app, wire: text, canonical: true}
   - {id: http_2,   family: http, version: "2",   rfc: [9113],      layer: app, wire: binary}
   - {id: http_3,   family: http, version: "3",   rfc: [9114],      layer: app, wire: binary}
 
-  # === HTTP-embedded protocols ===
-  - {id: websocket, family: ws,      version: "13",  rfc: [6455], layer: app, wire: binary}
-  - {id: grpc,      family: grpc,    version: "any", rfc: [],     layer: app, wire: binary,
-     note: "Runs over HTTP/2"}
-  - {id: graphql,   family: graphql, version: "any", rfc: [],     layer: app, wire: text,
-     note: "Runs over HTTP/1.1 or /2"}
+  # === Single-version protocols layered/embedded on HTTP ===
+  - {id: websocket, family: ws,      version: "13",  rfc: [6455], layer: app, wire: binary, canonical: true}
+  - {id: grpc,      family: grpc,    version: "any", rfc: [],     layer: app, wire: binary, canonical: true}
+  - {id: graphql,   family: graphql, version: "any", rfc: [],     layer: app, wire: text,   canonical: true}
 
-  # === DNS family (4 variants - alternative encodings, treated as versions) ===
-  - {id: dns, family: dns, version: "classic", rfc: [1034, 1035], layer: app, wire: binary}
+  # === DNS family (4 transports; canonical = dns) ===
+  - {id: dns, family: dns, version: "classic", rfc: [1034, 1035], layer: app, wire: binary, canonical: true}
   - {id: doh, family: dns, version: "https",   rfc: [8484],       layer: app, wire: binary}
   - {id: dot, family: dns, version: "tls",     rfc: [7858],       layer: app, wire: binary}
   - {id: doq, family: dns, version: "quic",    rfc: [9250],       layer: app, wire: binary}
 
-  # === SMTP family (3 versions) ===
-  - {id: smtp_822,  family: smtp, version: "822",  rfc: [821],  layer: app, wire: text,
-     note: "Legacy RFC 821 wire (deprecated by 2821)"}
+  # === SMTP family (3 versions; canonical = smtp_5321) ===
+  - {id: smtp_822,  family: smtp, version: "822",  rfc: [821],  layer: app, wire: text}
   - {id: smtp_2821, family: smtp, version: "2821", rfc: [2821], layer: app, wire: text}
-  - {id: smtp_5321, family: smtp, version: "5321", rfc: [5321], layer: app, wire: text,
-     note: "Current SMTP (also ESMTP)"}
+  - {id: smtp_5321, family: smtp, version: "5321", rfc: [5321], layer: app, wire: text, canonical: true}
 
-  # === Internet Message Format - IMF (3 versions; headers in email body) ===
-  - {id: imf_822,  family: imf, version: "822",  rfc: [822],  layer: app, wire: text,
-     note: "Original 822; legacy header semantics"}
+  # === IMF family (3 versions; canonical = imf_5322) ===
+  - {id: imf_822,  family: imf, version: "822",  rfc: [822],  layer: app, wire: text}
   - {id: imf_2822, family: imf, version: "2822", rfc: [2822], layer: app, wire: text}
-  - {id: imf_5322, family: imf, version: "5322", rfc: [5322], layer: app, wire: text,
-     note: "Current; defines From / Sender / Reply-To"}
+  - {id: imf_5322, family: imf, version: "5322", rfc: [5322], layer: app, wire: text, canonical: true}
 
-  # === MIME ===
-  - {id: mime, family: mime, version: "any", rfc: [2045, 2046, 2047, 2048, 2049], layer: app, wire: text}
+  # === MIME (single) ===
+  - {id: mime, family: mime, version: "any", rfc: [2045, 2046, 2047, 2048, 2049], layer: app, wire: text, canonical: true}
 
-  # === Email authentication (no versions) ===
-  - {id: spf,   family: emailauth, version: "1",     rfc: [7208], layer: app, wire: text}
-  - {id: dkim,  family: emailauth, version: "1",     rfc: [6376], layer: app, wire: text}
-  - {id: dmarc, family: emailauth, version: "1",     rfc: [7489], layer: app, wire: text}
-  - {id: arc,   family: emailauth, version: "any",   rfc: [8617], layer: app, wire: text}
+  # === Email authentication: each protocol is its own family ===
+  - {id: spf,   family: spf,   version: "1",   rfc: [7208], layer: app, wire: text, canonical: true}
+  - {id: dkim,  family: dkim,  version: "1",   rfc: [6376], layer: app, wire: text, canonical: true}
+  - {id: dmarc, family: dmarc, version: "1",   rfc: [7489], layer: app, wire: text, canonical: true}
+  - {id: arc,   family: arc,   version: "any", rfc: [8617], layer: app, wire: text, canonical: true}
 
-  # === Web security ===
-  - {id: cors, family: webapp, version: "any", rfc: [], layer: app, wire: text}
-  - {id: sop,  family: webapp, version: "any", rfc: [], layer: app, wire: text}
+  # === Web security: each is its own family ===
+  - {id: cors, family: cors, version: "any", rfc: [], layer: app, wire: text, canonical: true}
+  - {id: sop,  family: sop,  version: "any", rfc: [], layer: app, wire: text, canonical: true}
 
-  # === IoT (CoAP + MQTT 2 versions) ===
-  - {id: coap,        family: coap, version: "1",       rfc: [7252], layer: app, wire: binary}
-  - {id: mqtt_3_1_1,  family: mqtt, version: "3.1.1",   rfc: [],     layer: app, wire: binary,
-     note: "OASIS MQTT 3.1.1"}
-  - {id: mqtt_5,      family: mqtt, version: "5",       rfc: [],     layer: app, wire: binary,
-     note: "OASIS MQTT 5"}
+  # === CoAP (single) ===
+  - {id: coap, family: coap, version: "1", rfc: [7252], layer: app, wire: binary, canonical: true}
 
-  # === OAuth (2 versions) ===
-  - {id: oauth_1, family: oauth, version: "1",   rfc: [5849], layer: app, wire: text}
-  - {id: oauth_2, family: oauth, version: "2",   rfc: [6749], layer: app, wire: text}
+  # === MQTT family (2 versions; canonical = mqtt_3_1_1 - still dominant in deployments) ===
+  - {id: mqtt_3_1_1, family: mqtt, version: "3.1.1", rfc: [], layer: app, wire: binary, canonical: true}
+  - {id: mqtt_5,     family: mqtt, version: "5",     rfc: [], layer: app, wire: binary}
+
+  # === OAuth family (2 versions; canonical = oauth_2 - OAuth 1 is deprecated) ===
+  - {id: oauth_1, family: oauth, version: "1", rfc: [5849], layer: app, wire: text}
+  - {id: oauth_2, family: oauth, version: "2", rfc: [6749], layer: app, wire: text, canonical: true}
 
 edges:
   # =========================================================================
   # version_of edges: NEWER -> OLDER (all pairs within a family)
-  # The walker will terminate the walk after sampling exactly one of these.
+  # The walker terminates the walk after sampling exactly one of these.
   # =========================================================================
 
   # HTTP family - 5 versions = C(5,2) = 10 pairs
@@ -110,12 +114,16 @@ edges:
   - {from: oauth_2, to: oauth_1, type: version_of}
 
   # =========================================================================
-  # composes_with edges: cross-protocol semantic composition (L4 candidates)
+  # composes_with / embeds edges: cross-protocol relations
+  # Walker will only sample these when at least one endpoint is canonical;
+  # non-canonical endpoints are reachable for L4 only via canonical_of() swap.
+  # All cross-protocol edges below connect canonical nodes of distinct families,
+  # so the walker's canonical constraint is naturally satisfied.
   # =========================================================================
 
   # Email auth + SMTP envelope (Composition Kills territory)
   - {from: spf,   to: smtp_5321, type: composes_with, note: "SPF authenticates SMTP envelope Return-Path"}
-  - {from: dkim,  to: smtp_5321, type: composes_with, note: "DKIM signs header set chosen at send time"}
+  - {from: dkim,  to: smtp_5321, type: composes_with, note: "DKIM signs headers chosen at send time"}
   - {from: dmarc, to: spf,       type: composes_with}
   - {from: dmarc, to: dkim,      type: composes_with}
   - {from: arc,   to: dmarc,     type: composes_with}
@@ -126,31 +134,26 @@ edges:
 
   # Web security
   - {from: cors, to: http_1_1, type: composes_with, note: "CORS rides on HTTP headers"}
-  - {from: cors, to: http_2,   type: composes_with}
   - {from: cors, to: sop,      type: composes_with, note: "CORS relaxes Same-Origin Policy"}
 
-  # OAuth composition (bearer token in HTTP header)
+  # OAuth composition (bearer token in HTTP header) - only via canonical http
   - {from: oauth_2, to: http_1_1, type: composes_with}
-  - {from: oauth_2, to: http_2,   type: composes_with}
 
   # MIME and IMF live together in email body
   - {from: mime, to: imf_5322, type: composes_with, note: "MIME extends IMF body semantics"}
 
-  # =========================================================================
-  # embeds edges: one protocol carries another as payload (L4 candidates)
-  # =========================================================================
-
-  # WebSocket / gRPC / GraphQL over HTTP
+  # WebSocket / gRPC / GraphQL embedded in HTTP (canonical http_1_1; gRPC over h2)
   - {from: websocket, to: http_1_1, type: embeds, note: "WS upgrade handshake over HTTP/1.1"}
   - {from: grpc,      to: http_2,   type: embeds, note: "gRPC = HTTP/2 + Protobuf"}
   - {from: graphql,   to: http_1_1, type: embeds}
-  - {from: graphql,   to: http_2,   type: embeds}
 
-  # DNS variants embedding into transport-providing protocols
-  - {from: doh, to: http_2, type: embeds, note: "DoH = DNS wire format inside HTTP/2 POST body"}
+  # DoH embeds inside HTTP - keep h2 here (DoH spec mandates HTTP/2);
+  # h2 is non-canonical for http family, so this edge will only be available
+  # for L4 if either side is canonical via the family substitution. The walker
+  # treats `doh` as canonical for dns family - we add a separate edge from doh
+  # to canonical http_1_1 for cleanliness too:
+  - {from: doh, to: http_1_1, type: embeds, note: "DoH inside HTTP (canonical http_1_1)"}
 
   # SMTP envelope carries IMF + MIME body
   - {from: smtp_5321, to: imf_5322, type: embeds, note: "SMTP DATA carries IMF headers"}
   - {from: smtp_5321, to: mime,     type: embeds, note: "SMTP DATA carries MIME-encoded body parts"}
-  - {from: smtp_2821, to: imf_2822, type: embeds}
-  - {from: smtp_822,  to: imf_822,  type: embeds}

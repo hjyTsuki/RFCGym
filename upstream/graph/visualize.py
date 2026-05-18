@@ -95,19 +95,37 @@ def draw(
 
     fig, ax = plt.subplots(figsize=figsize)
 
-    # Nodes grouped by family for legend
+    # Nodes grouped by family for legend; canonical nodes get thick border
     fcolors = family_colors(g)
     for fam, color in fcolors.items():
-        nodes_in_family = [n for n in g.nodes() if g.nodes[n]["family"] == fam]
-        nx.draw_networkx_nodes(
-            g, pos,
-            nodelist=nodes_in_family,
-            node_color=[color] * len(nodes_in_family),
-            node_size=1200,
-            edgecolors="black",
-            linewidths=1.0,
-            ax=ax,
-        )
+        canonical_nodes = [
+            n for n in g.nodes()
+            if g.nodes[n]["family"] == fam and g.nodes[n].get("canonical", False)
+        ]
+        regular_nodes = [
+            n for n in g.nodes()
+            if g.nodes[n]["family"] == fam and not g.nodes[n].get("canonical", False)
+        ]
+        if regular_nodes:
+            nx.draw_networkx_nodes(
+                g, pos,
+                nodelist=regular_nodes,
+                node_color=[color] * len(regular_nodes),
+                node_size=1100,
+                edgecolors="black",
+                linewidths=0.8,
+                ax=ax,
+            )
+        if canonical_nodes:
+            nx.draw_networkx_nodes(
+                g, pos,
+                nodelist=canonical_nodes,
+                node_color=[color] * len(canonical_nodes),
+                node_size=1400,
+                edgecolors="black",
+                linewidths=2.6,
+                ax=ax,
+            )
 
     # Labels: show "family/version" except where version=="any" (just family)
     labels = {}

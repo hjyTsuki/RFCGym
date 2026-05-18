@@ -56,6 +56,8 @@ class Node:
     rfc: List[int] = field(default_factory=list)
     layer: str = "app"            # 'app' | 'sec' | 'transport' | 'link' | 'format' | ...
     wire: str = "binary"           # 'text' | 'binary'
+    canonical: bool = False        # exactly one node per family should set this True;
+                                   # walker uses canonical version when crossing protocols
     note: Optional[str] = None
 
     def display(self) -> str:
