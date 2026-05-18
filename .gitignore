@@ -1,0 +1,13 @@
+.env
+docker/certs/*.pem
+docker/certs/*.key
+docker/mock-origin/www/test.png
+__pycache__/
+*.pyc
+.venv/
+.idea/
+.vscode/
+*.log
+cases/*
+!cases/.gitkeep
+chroma/

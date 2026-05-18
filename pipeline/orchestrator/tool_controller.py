@@ -1,0 +1,284 @@
+"""
+Tool Access Control for Multi-Agent System
+
+This module defines which tools each agent CANNOT access (denylist approach)
+and which bash commands are forbidden, removing the need to document these
+restrictions in agent prompts.
+"""
+
+import re
+from typing import List, Dict, Set, Tuple
+from enum import Enum
+
+
+# Dangerous bash command patterns that should NEVER be executed
+DANGEROUS_COMMAND_PATTERNS: List[Tuple[str, str]] = [
+    # Docker commands that affect ALL containers
+    (r'docker\s+rm\s+.*\$\(docker\s+ps', 'Bulk container removal'),
+    (r'docker\s+stop\s+.*\$\(docker\s+ps', 'Bulk container stop'),
+    (r'docker\s+kill\s+.*\$\(docker\s+ps', 'Bulk container kill'),
+    (r'docker\s+container\s+prune', 'Container prune'),
+    (r'docker\s+system\s+prune', 'System prune'),
+    (r'docker\s+image\s+prune\s+-a', 'Remove all images'),
+    (r'docker\s+volume\s+prune', 'Volume prune'),
+    (r'docker\s+network\s+prune', 'Network prune'),
+
+    # Dangerous system commands (only match truly dangerous patterns)
+    # Note: rm -rf /app/xxx is allowed, only rm -rf / or rm -rf /* is blocked
+    (r'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+/\s*$', 'Remove root filesystem'),
+    (r'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+/\s*[;&|]', 'Remove root filesystem'),
+    (r'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+/\*', 'Remove all files'),
+    (r'rm\s+-rf\s+~', 'Remove home directory'),
+    (r'mkfs\.', 'Format filesystem'),
+    (r'dd\s+if=.*of=/dev/', 'Write to device'),
+    (r'>\s*/dev/sd', 'Overwrite disk'),
+
+    # Fork bombs and resource exhaustion
+    (r':\(\)\s*\{\s*:\|:&\s*\};:', 'Fork bomb'),
+    (r'while\s+true.*done', 'Infinite loop (use with caution)'),
+
+    # Outbound network to non-private targets (RFCGym fuzzing must stay in test net)
+    # Allow: localhost, 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+    #        *.local, *.internal, host.docker.internal, container names (no dots)
+    (r'\b(curl|wget|nc|ncat|nmap|masscan)\s+[^|;&]*?(?<![\w.-])'
+     r'(?!(?:localhost|127\.|10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.|'
+     r'host\.docker\.internal|[a-z0-9_-]+\.(?:local|internal)(?:\s|$|:)))'
+     r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[a-z0-9.-]+\.(?:com|net|org|io|cn|gov|edu))',
+     'Outbound to non-private target (use only test-net hosts)'),
+]
+
+
+class AgentType(Enum):
+    """Enumeration of agent types in the system.
+
+    RFCGym (protocol vulnerability hunting) variant — renamed from CVE-Factory:
+      analyzer  -> protocol_analyzer   (spec + vendor matrix + known attacks)
+      generator -> scenario_generator  (test_service_alive + test_known_attacks; NO solution.sh)
+      builder   -> scenario_builder    (multi-vendor protocol service stack)
+      validator -> attack_verifier     (oracle: >=1 known attack reproduces)
+      checker   -> env_finalizer       (env compliance, no fix logic)
+      judger    -> poc_judger          (L1/L2/L3 + validity/novelty)
+
+    NEW agents (not in CVE-Factory):
+      fuzzer          - Runtime evaluation target (black-box LLM under test)
+      known_attacker  - Lightweight harness for replaying known attacks (optional)
+
+    REMOVED:
+      solver - No fix verification in vulnerability hunting pipeline
+    """
+    PROTOCOL_ANALYZER = "protocol_analyzer"
+    SCENARIO_GENERATOR = "scenario_generator"
+    SCENARIO_BUILDER = "scenario_builder"
+    ATTACK_VERIFIER = "attack_verifier"
+    ENV_FINALIZER = "env_finalizer"
+    POC_JUDGER = "poc_judger"
+    FUZZER = "fuzzer"
+    KNOWN_ATTACKER = "known_attacker"
+    # retained extension agents (lightly repurposed in prompts):
+    CHANGER = "changer"
+    COMPARER = "comparer"
+    EXPERT = "expert"
+
+
+class ToolController:
+    """
+    Controls tool access permissions for each agent type using a denylist approach.
+
+    Instead of specifying which tools each agent CAN use (allowlist),
+    we specify which tools each agent CANNOT use (denylist).
+    This is simpler and more maintainable - most agents have full access,
+    only a few need specific restrictions.
+
+    Orchestrator uses this to configure Claude Code SDK sessions via
+    the disallowed_tools parameter.
+    """
+
+    # Tools to deny per agent type.
+    # Agents not listed here have no restrictions (full tool access).
+    DISALLOWED_TOOLS: Dict[AgentType, Set[str]] = {
+        # PROTOCOL_ANALYZER: no restrictions (needs WebSearch/WebFetch for RFCs + vendor docs)
+
+        # Synthesis-stage agents: no web access
+        AgentType.SCENARIO_GENERATOR: {'WebSearch', 'WebFetch'},
+        AgentType.SCENARIO_BUILDER: {'WebSearch', 'WebFetch'},
+        AgentType.ATTACK_VERIFIER: {'WebSearch', 'WebFetch'},
+        AgentType.ENV_FINALIZER: {'WebSearch', 'WebFetch'},
+
+        # Runtime evaluation: FUZZER must NOT have web access (prevents cheating
+        # via web-search-for-known-CVEs); also no Task tool to keep behavior auditable
+        AgentType.FUZZER: {'WebSearch', 'WebFetch'},
+
+        # Known attacker harness: no web (deterministic replay only)
+        AgentType.KNOWN_ATTACKER: {'WebSearch', 'WebFetch'},
+
+        # Judging: read-only, no Edit; can use web to check novelty against CVE DBs
+        AgentType.POC_JUDGER: {'Edit'},
+
+        # Extension agents
+        AgentType.CHANGER: {'WebSearch', 'WebFetch'},
+        AgentType.COMPARER: {'Edit', 'WebSearch', 'WebFetch'},
+        AgentType.EXPERT: {'WebSearch', 'WebFetch'},
+    }
+
+    @classmethod
+    def get_disallowed_tools(cls, agent_type: AgentType) -> List[str]:
+        """
+        Get list of tools denied for a specific agent type.
+
+        Args:
+            agent_type: The type of agent
+
+        Returns:
+            List of tool names the agent CANNOT use
+        """
+        denied = cls.DISALLOWED_TOOLS.get(agent_type, set())
+        return sorted(list(denied))
+
+    @classmethod
+    def is_tool_allowed(cls, agent_type: AgentType, tool_name: str) -> bool:
+        """
+        Check if a specific tool is allowed for an agent type.
+
+        Args:
+            agent_type: The type of agent
+            tool_name: Name of the tool to check
+
+        Returns:
+            True if tool is allowed, False otherwise
+        """
+        denied = cls.DISALLOWED_TOOLS.get(agent_type, set())
+        return tool_name not in denied
+
+    @classmethod
+    def get_tool_restrictions_summary(cls, agent_type: AgentType) -> str:
+        """
+        Get a human-readable summary of tool restrictions.
+        Used for logging/debugging, NOT for agent prompts.
+
+        Args:
+            agent_type: The type of agent
+
+        Returns:
+            String describing tool restrictions
+        """
+        denied = cls.get_disallowed_tools(agent_type)
+        if not denied:
+            return f"{agent_type.value}: no restrictions"
+        return f"{agent_type.value}: denied [{', '.join(denied)}]"
+
+    @classmethod
+    def get_all_tool_configs(cls) -> Dict[str, List[str]]:
+        """
+        Get complete tool configuration for all agents.
+        Useful for configuration export or validation.
+
+        Returns:
+            Dictionary mapping agent names to their disallowed tools
+        """
+        return {
+            agent_type.value: cls.get_disallowed_tools(agent_type)
+            for agent_type in AgentType
+        }
+
+
+# Convenience function for quick access
+def get_agent_disallowed_tools(agent_name: str) -> List[str]:
+    """
+    Quick access function to get disallowed tools for an agent by name.
+
+    Args:
+        agent_name: Name of agent (e.g., 'analyzer', 'builder')
+
+    Returns:
+        List of disallowed tool names
+
+    Raises:
+        ValueError: If agent name is not recognized
+    """
+    try:
+        agent_type = AgentType(agent_name.lower())
+        return ToolController.get_disallowed_tools(agent_type)
+    except ValueError:
+        raise ValueError(f"Unknown agent type: {agent_name}")
+
+
+class CommandFilter:
+    """
+    Filters dangerous bash commands to prevent destructive operations.
+    """
+
+    @classmethod
+    def is_dangerous(cls, command: str) -> Tuple[bool, str]:
+        """
+        Check if a bash command matches any dangerous pattern.
+
+        Args:
+            command: The bash command to check
+
+        Returns:
+            Tuple of (is_dangerous, reason)
+        """
+        for pattern, reason in DANGEROUS_COMMAND_PATTERNS:
+            if re.search(pattern, command, re.IGNORECASE):
+                return True, reason
+        return False, ""
+
+    @classmethod
+    def validate_command(cls, command: str) -> str:
+        """
+        Validate a command and raise exception if dangerous.
+
+        Args:
+            command: The bash command to validate
+
+        Returns:
+            The command if safe
+
+        Raises:
+            ValueError: If command is dangerous
+        """
+        is_dangerous, reason = cls.is_dangerous(command)
+        if is_dangerous:
+            raise ValueError(f"Dangerous command blocked: {reason}")
+        return command
+
+    @classmethod
+    def get_blocked_patterns(cls) -> List[str]:
+        """
+        Get list of blocked command patterns for documentation.
+
+        Returns:
+            List of pattern descriptions
+        """
+        return [f"{reason}: {pattern}" for pattern, reason in DANGEROUS_COMMAND_PATTERNS]
+
+
+def is_command_safe(command: str) -> Tuple[bool, str]:
+    """
+    Quick access function to check if a command is safe.
+
+    Args:
+        command: The bash command to check
+
+    Returns:
+        Tuple of (is_safe, reason_if_blocked)
+    """
+    is_dangerous, reason = CommandFilter.is_dangerous(command)
+    return not is_dangerous, reason
+
+
+if __name__ == "__main__":
+    # Print tool configurations for verification
+    print("Agent Tool Restrictions (Denylist)\n" + "=" * 50)
+    for agent_type in AgentType:
+        denied = ToolController.get_disallowed_tools(agent_type)
+        if denied:
+            print(f"\n{agent_type.value.upper()}: denied")
+            for tool in denied:
+                print(f"  - {tool}")
+        else:
+            print(f"\n{agent_type.value.upper()}: no restrictions")
+
+    print("\n\nBlocked Command Patterns\n" + "=" * 50)
+    for pattern, reason in DANGEROUS_COMMAND_PATTERNS:
+        print(f"  - {reason}")

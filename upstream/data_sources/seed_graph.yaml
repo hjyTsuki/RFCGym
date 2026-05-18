@@ -1,0 +1,156 @@
+# RFCGym Protocol Graph - Seed v2 (application layer only)
+#
+# Coverage: 30 application-layer protocol nodes. Each multi-version protocol
+# expands to one node per version. Version edges are directed NEWER -> OLDER
+# (matches the natural "translates down to" gateway direction, e.g. HTTP/3 -> HTTP/1.1).
+#
+# Constraint on the walker (enforced in random_walk.py, not here):
+#   If the first edge sampled in a walk is `version_of`, the walk terminates
+#   at that 2-node pair. No further hops, no other protocols, no other versions.
+#   Rationale: a cross-version translation scenario is atomic - one version pair.
+#   Chaining (h3 -> h2 -> h1.1) muddies the bug_layer for downstream analysis.
+
+nodes:
+  # === HTTP family (5 versions) ===
+  - {id: http_0_9, family: http, version: "0.9", rfc: [],          layer: app, wire: text,
+     note: "Historical; minimal request/response"}
+  - {id: http_1_0, family: http, version: "1.0", rfc: [1945],      layer: app, wire: text}
+  - {id: http_1_1, family: http, version: "1.1", rfc: [9110, 9112], layer: app, wire: text}
+  - {id: http_2,   family: http, version: "2",   rfc: [9113],      layer: app, wire: binary}
+  - {id: http_3,   family: http, version: "3",   rfc: [9114],      layer: app, wire: binary}
+
+  # === HTTP-embedded protocols ===
+  - {id: websocket, family: ws,      version: "13",  rfc: [6455], layer: app, wire: binary}
+  - {id: grpc,      family: grpc,    version: "any", rfc: [],     layer: app, wire: binary,
+     note: "Runs over HTTP/2"}
+  - {id: graphql,   family: graphql, version: "any", rfc: [],     layer: app, wire: text,
+     note: "Runs over HTTP/1.1 or /2"}
+
+  # === DNS family (4 variants - alternative encodings, treated as versions) ===
+  - {id: dns, family: dns, version: "classic", rfc: [1034, 1035], layer: app, wire: binary}
+  - {id: doh, family: dns, version: "https",   rfc: [8484],       layer: app, wire: binary}
+  - {id: dot, family: dns, version: "tls",     rfc: [7858],       layer: app, wire: binary}
+  - {id: doq, family: dns, version: "quic",    rfc: [9250],       layer: app, wire: binary}
+
+  # === SMTP family (3 versions) ===
+  - {id: smtp_822,  family: smtp, version: "822",  rfc: [821],  layer: app, wire: text,
+     note: "Legacy RFC 821 wire (deprecated by 2821)"}
+  - {id: smtp_2821, family: smtp, version: "2821", rfc: [2821], layer: app, wire: text}
+  - {id: smtp_5321, family: smtp, version: "5321", rfc: [5321], layer: app, wire: text,
+     note: "Current SMTP (also ESMTP)"}
+
+  # === Internet Message Format - IMF (3 versions; headers in email body) ===
+  - {id: imf_822,  family: imf, version: "822",  rfc: [822],  layer: app, wire: text,
+     note: "Original 822; legacy header semantics"}
+  - {id: imf_2822, family: imf, version: "2822", rfc: [2822], layer: app, wire: text}
+  - {id: imf_5322, family: imf, version: "5322", rfc: [5322], layer: app, wire: text,
+     note: "Current; defines From / Sender / Reply-To"}
+
+  # === MIME ===
+  - {id: mime, family: mime, version: "any", rfc: [2045, 2046, 2047, 2048, 2049], layer: app, wire: text}
+
+  # === Email authentication (no versions) ===
+  - {id: spf,   family: emailauth, version: "1",     rfc: [7208], layer: app, wire: text}
+  - {id: dkim,  family: emailauth, version: "1",     rfc: [6376], layer: app, wire: text}
+  - {id: dmarc, family: emailauth, version: "1",     rfc: [7489], layer: app, wire: text}
+  - {id: arc,   family: emailauth, version: "any",   rfc: [8617], layer: app, wire: text}
+
+  # === Web security ===
+  - {id: cors, family: webapp, version: "any", rfc: [], layer: app, wire: text}
+  - {id: sop,  family: webapp, version: "any", rfc: [], layer: app, wire: text}
+
+  # === IoT (CoAP + MQTT 2 versions) ===
+  - {id: coap,        family: coap, version: "1",       rfc: [7252], layer: app, wire: binary}
+  - {id: mqtt_3_1_1,  family: mqtt, version: "3.1.1",   rfc: [],     layer: app, wire: binary,
+     note: "OASIS MQTT 3.1.1"}
+  - {id: mqtt_5,      family: mqtt, version: "5",       rfc: [],     layer: app, wire: binary,
+     note: "OASIS MQTT 5"}
+
+  # === OAuth (2 versions) ===
+  - {id: oauth_1, family: oauth, version: "1",   rfc: [5849], layer: app, wire: text}
+  - {id: oauth_2, family: oauth, version: "2",   rfc: [6749], layer: app, wire: text}
+
+edges:
+  # =========================================================================
+  # version_of edges: NEWER -> OLDER (all pairs within a family)
+  # The walker will terminate the walk after sampling exactly one of these.
+  # =========================================================================
+
+  # HTTP family - 5 versions = C(5,2) = 10 pairs
+  - {from: http_1_0, to: http_0_9, type: version_of}
+  - {from: http_1_1, to: http_0_9, type: version_of}
+  - {from: http_1_1, to: http_1_0, type: version_of}
+  - {from: http_2,   to: http_0_9, type: version_of}
+  - {from: http_2,   to: http_1_0, type: version_of}
+  - {from: http_2,   to: http_1_1, type: version_of, note: "h2 -> h1.1 (HDiff, Frameshifter territory)"}
+  - {from: http_3,   to: http_0_9, type: version_of}
+  - {from: http_3,   to: http_1_0, type: version_of}
+  - {from: http_3,   to: http_1_1, type: version_of, note: "h3 -> h1.1 at CDN edge (H3Act case)"}
+  - {from: http_3,   to: http_2,   type: version_of}
+
+  # SMTP - 3 versions
+  - {from: smtp_2821, to: smtp_822,  type: version_of}
+  - {from: smtp_5321, to: smtp_822,  type: version_of}
+  - {from: smtp_5321, to: smtp_2821, type: version_of}
+
+  # IMF - 3 versions
+  - {from: imf_2822, to: imf_822,  type: version_of}
+  - {from: imf_5322, to: imf_822,  type: version_of}
+  - {from: imf_5322, to: imf_2822, type: version_of}
+
+  # DNS variants (treat alternative transports as versions of DNS)
+  - {from: doh, to: dns, type: version_of, note: "DNS over HTTPS"}
+  - {from: dot, to: dns, type: version_of, note: "DNS over TLS"}
+  - {from: doq, to: dns, type: version_of, note: "DNS over QUIC"}
+
+  # MQTT - 2 versions
+  - {from: mqtt_5, to: mqtt_3_1_1, type: version_of}
+
+  # OAuth - 2 versions
+  - {from: oauth_2, to: oauth_1, type: version_of}
+
+  # =========================================================================
+  # composes_with edges: cross-protocol semantic composition (L4 candidates)
+  # =========================================================================
+
+  # Email auth + SMTP envelope (Composition Kills territory)
+  - {from: spf,   to: smtp_5321, type: composes_with, note: "SPF authenticates SMTP envelope Return-Path"}
+  - {from: dkim,  to: smtp_5321, type: composes_with, note: "DKIM signs header set chosen at send time"}
+  - {from: dmarc, to: spf,       type: composes_with}
+  - {from: dmarc, to: dkim,      type: composes_with}
+  - {from: arc,   to: dmarc,     type: composes_with}
+
+  # The classic L4 case: SPF authenticates SMTP envelope but MUA displays IMF From
+  - {from: imf_5322, to: spf,    type: composes_with, note: "IMF From vs SMTP Return-Path - Composition Kills"}
+  - {from: imf_5322, to: dkim,   type: composes_with}
+
+  # Web security
+  - {from: cors, to: http_1_1, type: composes_with, note: "CORS rides on HTTP headers"}
+  - {from: cors, to: http_2,   type: composes_with}
+  - {from: cors, to: sop,      type: composes_with, note: "CORS relaxes Same-Origin Policy"}
+
+  # OAuth composition (bearer token in HTTP header)
+  - {from: oauth_2, to: http_1_1, type: composes_with}
+  - {from: oauth_2, to: http_2,   type: composes_with}
+
+  # MIME and IMF live together in email body
+  - {from: mime, to: imf_5322, type: composes_with, note: "MIME extends IMF body semantics"}
+
+  # =========================================================================
+  # embeds edges: one protocol carries another as payload (L4 candidates)
+  # =========================================================================
+
+  # WebSocket / gRPC / GraphQL over HTTP
+  - {from: websocket, to: http_1_1, type: embeds, note: "WS upgrade handshake over HTTP/1.1"}
+  - {from: grpc,      to: http_2,   type: embeds, note: "gRPC = HTTP/2 + Protobuf"}
+  - {from: graphql,   to: http_1_1, type: embeds}
+  - {from: graphql,   to: http_2,   type: embeds}
+
+  # DNS variants embedding into transport-providing protocols
+  - {from: doh, to: http_2, type: embeds, note: "DoH = DNS wire format inside HTTP/2 POST body"}
+
+  # SMTP envelope carries IMF + MIME body
+  - {from: smtp_5321, to: imf_5322, type: embeds, note: "SMTP DATA carries IMF headers"}
+  - {from: smtp_5321, to: mime,     type: embeds, note: "SMTP DATA carries MIME-encoded body parts"}
+  - {from: smtp_2821, to: imf_2822, type: embeds}
+  - {from: smtp_822,  to: imf_822,  type: embeds}

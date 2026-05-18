@@ -1,0 +1,106 @@
+# Reference known_attacks.yaml for SCN-HTTP3-CDN-RANGE
+#
+# This file is the GROUND TRUTH oracle for the Attack Verifier.
+# The Protocol Analyzer agent will reproduce/adapt this when it runs on
+# this scenario; this copy is kept here as the human-curated reference.
+
+scenario_id: SCN-HTTP3-CDN-RANGE
+bug_layer: L2           # cross-version translation (HTTP/3 <-> HTTP/1.1)
+source: "H3Act paper §5.1.1"
+
+attacks:
+
+  - id: A1-range-removal-amplification
+    title: "Range stripped on translation → full-resource origin pull"
+    affected_vendors: [nginx-1.27, envoy-1.30, caddy-2.8, haproxy-2.9]
+    # The fuzzer harness will run this against each ingress and any that
+    # exhibits the behavior counts as a verifier-positive.
+
+    trigger:
+      protocol: http/3
+      method: GET
+      path: /test.png            # 29 MB asset on origin
+      headers:
+        Range: "bytes=0-0"
+
+    expected_wire_effect:
+      # Wire-level oracle (NOT source code grep)
+      origin_request_headers_must_lack: [Range]
+      origin_response_status: 200
+      origin_response_body_length_min: 30000000   # full file
+      client_response_status: [200, 206]
+      amplification_ratio_min: 1000000            # 1M× lower bound
+
+    evidence:
+      - "Origin access.log shows GET /test.png with no Range header"
+      - "Origin response Content-Length ~ 30000000"
+      - "Client received body length <= 1 (with 206) or full body (with 200)"
+
+  - id: A2-range-expansion-4k
+    title: "Range rounded up to 4 KiB on translation"
+    affected_vendors: [tencent-edgeone, tencent-cdn]
+
+    trigger:
+      protocol: http/3
+      method: GET
+      path: /test.png
+      headers:
+        Range: "bytes=0-0"
+
+    expected_wire_effect:
+      origin_request_headers_must_have:
+        Range: "bytes=0-4095"
+      origin_response_status: 206
+      origin_response_content_range_pattern: "^bytes 0-4095/"
+      amplification_ratio_min: 4000
+      amplification_ratio_max: 5000
+
+    evidence:
+      - "Origin access.log shows GET /test.png Range: bytes=0-4095"
+
+  - id: A3-range-expansion-512k
+    title: "Range rounded up to 512 KiB on translation"
+    affected_vendors: [aliyun-cdn, aliyun-esa, huawei-cdn]
+
+    trigger:
+      protocol: http/3
+      method: GET
+      path: /test.png
+      headers:
+        Range: "bytes=0-0"
+
+    expected_wire_effect:
+      origin_request_headers_must_have:
+        Range: "bytes=0-524287"
+      origin_response_status: 206
+      origin_response_content_range_pattern: "^bytes 0-524287/"
+      amplification_ratio_min: 500000
+      amplification_ratio_max: 530000
+
+    evidence:
+      - "Origin access.log shows GET /test.png Range: bytes=0-524287"
+
+  - id: A4-range-expansion-1m
+    title: "Range rounded up to 1 MiB on translation"
+    affected_vendors: [cloudfront]
+
+    trigger:
+      protocol: http/3
+      method: GET
+      path: /test.png
+      headers:
+        Range: "bytes=0-0"
+
+    expected_wire_effect:
+      origin_request_headers_must_have:
+        Range: "bytes=0-1048575"
+      origin_response_status: 206
+      origin_response_content_range_pattern: "^bytes 0-1048575/"
+      amplification_ratio_min: 1000000
+      amplification_ratio_max: 1100000
+
+verifier_pass_threshold:
+  # Environment is considered ready if AT LEAST this many attacks reproduce
+  # on AT LEAST one ingress vendor in the local Docker stack.
+  min_attacks_reproduced: 1
+  min_vendors_with_attack: 1

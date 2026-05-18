@@ -1,0 +1,3 @@
+pyyaml
+claude-agent-sdk
+openpyxl

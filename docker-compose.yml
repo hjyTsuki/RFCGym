@@ -1,0 +1,72 @@
+name: h3act
+
+services:
+  mock-origin:
+    image: nginx:1.27-alpine
+    container_name: h3act-mock-origin
+    restart: unless-stopped
+    volumes:
+      - ./docker/mock-origin/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/mock-origin/www:/usr/share/nginx/html:ro
+      - origin-logs:/var/log/nginx
+    ports:
+      - "8080:80"
+    networks:
+      - h3act-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  mock-cdn:
+    image: nginx:1.27
+    container_name: h3act-mock-cdn
+    restart: unless-stopped
+    depends_on:
+      mock-origin:
+        condition: service_healthy
+    volumes:
+      - ./docker/mock-cdn/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/certs:/etc/nginx/certs:ro
+      - cdn-logs:/var/log/nginx
+      - cdn-cache:/var/cache/nginx
+    ports:
+      - "4433:443/tcp"
+      - "4433:443/udp"
+    networks:
+      - h3act-net
+
+  h3act-client:
+    build:
+      context: ./docker/h3act-client
+      dockerfile: Dockerfile
+    image: h3act/client:latest
+    container_name: h3act-client
+    depends_on:
+      - mock-cdn
+    env_file:
+      - .env
+    volumes:
+      - ./src:/app/src
+      - ./rfcs:/app/rfcs
+      - ./primitives:/app/primitives
+      - ./cases:/app/cases
+      - chroma-data:/app/chroma
+      - client-logs:/app/logs
+    networks:
+      - h3act-net
+    stdin_open: true
+    tty: true
+    command: ["bash"]
+
+networks:
+  h3act-net:
+    driver: bridge
+
+volumes:
+  origin-logs:
+  cdn-logs:
+  cdn-cache:
+  chroma-data:
+  client-logs:
