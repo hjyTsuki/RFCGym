@@ -1,0 +1,4 @@
+- [User Profile](user_profile.md) — 研究方向是协议/RFC fuzzing,工作目录 RFCGym
+- [Project: RFCGym Fuzzing Setup](project_rfcgym.md) — 黑盒协议 fuzzing,只有协议规范无源码
+- [Project: Research Direction](project_research_direction.md) — CVE pattern 挖掘 → validator 库 → LLM-as-Judge 合理性
+- [Judge Architecture: Reproducer](judge_architecture_reproducer.md) — Judge 不审稿,而是为 Agent 报告中的 claim 生成 validator 并执行验证
