@@ -78,11 +78,69 @@ The builder validates that every edge references known nodes.
 
 ## Roadmap
 
-- v1 (current): hand-curated seed graph (~25 nodes), random walker, prompt
-  builder. **No LLM call yet — outputs prompt strings only.**
-- v2: integrate Claude/OpenAI SDK; auto-generate SCN-*.md drafts; dedup against
+- v1: hand-curated seed graph (~25 nodes), random walker, prompt builder.
+  **No LLM call yet — outputs prompt strings only.** ✓
+- v2: two-stage walker with `version_of` constraint + canonical marking;
+  refined family taxonomy. ✓
+- v3: RFC index crawler + Wireshark dissector scanner + merge tool to expand
+  the seed graph automatically. ✓ (this iteration)
+- v4: integrate Claude/OpenAI SDK; auto-generate SCN-*.md drafts; dedup against
   existing `scenarios/`.
-- v3: Wireshark dissector C-source extraction (`data_sources/wireshark_extract.py`)
-  to auto-populate edges from real dispatch tables.
-- v4: Weighting edges by real-world prevalence (W3Techs CDN share, Wireshark
-  pcap statistics).
+
+## Data Source Crawlers (v3)
+
+### RFC Editor index
+
+```bash
+# Download + parse the full RFC Editor catalog
+python -m upstream.data_sources.rfc_index_crawler
+# Output: data_sources/rfc_catalog.json  (~9700 RFCs, ~4500 protocol candidates)
+
+# Force refresh from network
+python -m upstream.data_sources.rfc_index_crawler --refresh
+
+# Keep only protocol-likely entries
+python -m upstream.data_sources.rfc_index_crawler --filter-protocols --output protocols.json
+```
+
+Heuristic flag `is_protocol_candidate` per entry uses status (INTERNET
+STANDARD / PROPOSED STANDARD) + keyword vocabulary (`protocol`, `transport`,
+`handshake`, etc.) + protocol-name regex (`http|tls|dns|smtp|...`).
+Conservative; LLM should confirm before promotion.
+
+### Wireshark dissector source scan
+
+Wireshark ships 1500+ protocol dissectors as C source; each registers ports,
+sub-dissector dispatch, and friendly names. Parsing them gives us edges
+(`A dispatches_to B`) the RFC corpus does not.
+
+```bash
+# Clone Wireshark source somewhere (shallow is fine)
+git clone --depth=1 https://gitlab.com/wireshark/wireshark.git /tmp/ws
+
+# Scan dissectors
+python -m upstream.data_sources.wireshark_dissector_scan \
+    --src /tmp/ws/epan/dissectors \
+    --output upstream/data_sources/wireshark_relations.json
+```
+
+Output structure: per-protocol record with `ports`, `media_types`,
+`dispatches_to`, `dispatched_from`, `registered_aliases`.
+
+### Merge to graph candidates
+
+```bash
+python -m upstream.data_sources.merge
+# Reads:  rfc_catalog.json + wireshark_relations.json
+# Writes:
+#   graph_candidates_nodes.json
+#   graph_candidates_edges.json
+#   merge_report.md  (review summary)
+```
+
+Merger maps RFC titles to families via a hand-curated regex table
+(`FAMILY_HINTS` in `merge.py`); add patterns there to cover new families.
+
+**Important**: merge output is candidate-only. Promotion to `seed_graph.yaml`
+is a manual decision — review `merge_report.md`, optionally LLM-classify
+borderline cases, then edit YAML.

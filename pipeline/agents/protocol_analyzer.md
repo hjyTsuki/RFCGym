@@ -84,6 +84,52 @@
 >    amplification ratio, header transformation, log entry pattern). The
 >    downstream Attack Verifier uses this file directly.
 >
+> 6. **Fallback path when no composition CVE exists**. If the scenario is a
+>    novel combination (e.g. one of RFCGym's "research-gap" walks) and you
+>    cannot find a single published CVE / paper for the **exact composition**,
+>    you MUST still produce a usable `known_attacks.yaml` by falling back to
+>    per-protocol attacks:
+>
+>    - For EACH protocol in the scenario, find at least one published CVE,
+>      advisory, or peer-reviewed attack that affects that protocol in
+>      isolation.
+>    - Put these in a separate `fallback_per_protocol_attacks` section
+>      (parallel to the top-level `attacks` list).
+>    - The Attack Verifier will treat fallback attacks as a **weak oracle**:
+>      reproducing a fallback attack proves "the stack is wired correctly
+>      and each individual protocol implementation is exploitable as
+>      expected", which is enough to bless the environment as ready for
+>      Fuzzer evaluation — even though we have not proven any composition
+>      bug yet (that's exactly the research question the Fuzzer will explore).
+>
+>    YAML schema (extends the existing `known_attacks.yaml`):
+>
+>    ```yaml
+>    scenario_id: SCN-...
+>    bug_layer: L4
+>    source: "<paper or 'no published composition attack'>"
+>    oracle_mode: composition  # or 'fallback_per_protocol'
+>
+>    attacks:                  # primary; empty if oracle_mode=fallback_per_protocol
+>      - id: ...
+>        # standard composition-level attack entry
+>
+>    fallback_per_protocol_attacks:   # required when oracle_mode=fallback_per_protocol
+>      cors:
+>        - id: cors-A1-origin-reflection
+>          reference: "CVE-2018-20744"
+>          trigger: {...}
+>          expected_wire_effect: {...}
+>      oauth_2:
+>        - id: oauth-A1-bearer-cors-preflight-bypass
+>          reference: "auth0/node-oauth2-jwt-bearer#44"
+>          trigger: {...}
+>          expected_wire_effect: {...}
+>    ```
+>
+>    Coverage requirement: at minimum **1 attack per protocol** in the scenario,
+>    OR 1 composition attack, whichever exists.
+>
 > Result XML file: `.agent_state/protocol_analyzer-res.xml`
 
 ## Authoritative Sources (Required Reading Order)

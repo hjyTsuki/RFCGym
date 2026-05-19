@@ -11,3 +11,6 @@ __pycache__/
 cases/*
 !cases/.gitkeep
 chroma/
+
+# Crawler caches (regenerable)
+*.cache
